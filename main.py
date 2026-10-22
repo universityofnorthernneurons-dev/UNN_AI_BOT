@@ -118,6 +118,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         else:
             await query.edit_message_text(text="⚠️ فیلمی برای این درس ثبت نشده است.")
 
+# --- تابع ارسال درخواست به OpenRouter (متن) ---
 def call_openrouter_text(prompt, system_prompt):
     url = "https://openrouter.ai/api/v1/chat/completions"
     headers = {
@@ -125,7 +126,7 @@ def call_openrouter_text(prompt, system_prompt):
         "Content-Type": "application/json"
     }
     payload = {
-        "model": "google/gemini-flash-1.5",
+        "model": "qwen/qwen-2-vl-7b-instruct:free", # مدل جدید و فعال
         "messages": [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": prompt}
@@ -159,6 +160,7 @@ async def ai_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         await update.message.reply_text(f"⚠️ خطای متنی:\n`{str(e)}`", parse_mode='Markdown')
 
+# --- تابع ارسال درخواست به OpenRouter (عکس) ---
 def call_openrouter_image(img_b64, prompt):
     url = "https://openrouter.ai/api/v1/chat/completions"
     headers = {
@@ -166,7 +168,7 @@ def call_openrouter_image(img_b64, prompt):
         "Content-Type": "application/json"
     }
     payload = {
-        "model": "google/gemini-flash-1.5",
+        "model": "qwen/qwen-2-vl-7b-instruct:free", # مدل جدید و فعال
         "messages": [
             {
                 "role": "user",
