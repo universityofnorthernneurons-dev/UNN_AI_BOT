@@ -6,10 +6,12 @@ import threading
 import io
 import asyncio
 import traceback
+import re
 from PIL import Image
 from flask import Flask
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import ApplicationBuilder, CommandHandler, CallbackQueryHandler, ContextTypes, MessageHandler, filters
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ChatPermissions
+from telegram.ext import ApplicationBuilder, CommandHandler, CallbackQueryHandler, ContextTypes, MessageHandler, filters, ChatMemberHandler
+from telegram.constants import ParseMode
 
 app = Flask(__name__)
 
@@ -25,23 +27,92 @@ BOT_TOKEN = os.environ.get("BOT_TOKEN")
 GITHUB_TOKEN = os.environ.get("GITHUB_TOKEN")
 ADMIN_ID = int(os.environ.get("ADMIN_ID", 0))
 OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY")
+GROQ_API_KEY = os.environ.get("GROQ_API_KEY")
 
 REPO = "universityofnorthernneurons-dev/UNN_AI_BOT"
 
-# لیست مدل‌های رایگان و فعال برای پردازش تصویر (به ترتیب اولویت)
 VISION_MODELS = [
     "qwen/qwen-2.5-vl-7b-instruct:free",
-    "google/gemini-2.0-flash-exp:free",
-    "nvidia/nemotron-nano-12b-v2-vl:free",
-    "google/gemma-3-12b-it:free",
-    "google/gemma-3-27b-it:free",
-    "google/gemma-3-4b-it:free",
-    "mistralai/mistral-small-3.1-24b-instruct:free",
-    "dots-studio/dots-3-note-preview:free",
-    "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free",
-    "qwen/qwen3.8-27b:free"
+    "google/gemini-2.0-flash-exp:free"
 ]
 
+# 🚫 لیست کلمات ممنوعه (می‌تونی کلمات بیشتری اضافه کنی)
+BAD_WORDS = ["مادرجنده", "کس کش", "بی‌ناموس", "بی ناموس", "کیر", "جنده", "حرومزاده"]
+
+# ==========================================
+# توابع کمکی برای بررسی ادمین بودن و بن کردن
+# ==========================================
+async def is_user_admin(update: Update, context: ContextTypes.DEFAULT_TYPE, user_id: int) -> bool:
+    try:
+        member = await context.bot.get_chat_member(update.effective_chat.id, user_id)
+        return member.status in ['administrator', 'creator']
+    except Exception:
+        return False
+
+async def ban_user(update: Update, context: ContextTypes.DEFAULT_TYPE, user_id: int, reason: str):
+    try:
+        # بن کردن کاربر
+        await context.bot.ban_chat_member(chat_id=update.effective_chat.id, user_id=user_id, revoke_messages=True)
+        # حذف پیام (اگر وجود داشته باشد)
+        if update.message:
+            await update.message.delete()
+        # ارسال پیام اطلاع‌رسانی
+        await context.bot.send_message(chat_id=update.effective_chat.id, text=f"⛔️ کاربر مسدود شد.\n📝 دلیل: {reason}")
+    except Exception as e:
+        await context.bot.send_message(chat_id=update.effective_chat.id, text=f"⚠️ خطا در بن کردن: دسترسی Ban Users را به ربات بدهید.\n`{str(e)}`")
+
+# ==========================================
+# سیستم مدیریت پیام‌های گروه (Anti-Spam)
+# ==========================================
+async def auto_moderator(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not update.message or update.effective_chat.type not in ['group', 'supergroup']:
+        return
+    
+    user_id = update.effective_user.id
+    
+    # اگر فرستنده ادمین باشد، از فیلتر عبور می‌کند
+    if await is_user_admin(update, context, user_id):
+        return
+
+    # ۱. بررسی لینک
+    text = update.message.text or ""
+    if re.search(r'(https?://|www\.|t\.me/)', text, re.IGNORECASE):
+        await ban_user(update, context, user_id, "ارسال لینک (مخصوص ادمین‌هاست)")
+        return
+
+    # ۲. بررسی کلمات رکیک
+    for word in BAD_WORDS:
+        if word in text:
+            await ban_user(update, context, user_id, "استفاده از کلمات نامناسب")
+            return
+
+# ==========================================
+# دستور /ban با ریپلای
+# ==========================================
+async def ban_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_chat.type not in ['group', 'supergroup']:
+        return
+        
+    # چک کردن اینکه دستور دهنده ادمین است یا نه
+    if not await is_user_admin(update, context, update.effective_user.id):
+        await update.message.reply_text("❌ فقط ادمین‌های گروه می‌توانند از این دستور استفاده کنند.")
+        return
+
+    # چک کردن اینکه روی یک پیام ریپلای شده یا نه
+    if not update.message.reply_to_message:
+        await update.message.reply_text("⚠️ لطفاً روی پیام شخصی که می‌خواهید بن کنید، ریپلای کنید و سپس `/ban` را بفرستید.")
+        return
+
+    target_user = update.message.reply_to_message.from_user
+    if await is_user_admin(update, context, target_user.id):
+        await update.message.reply_text("❌ نمی‌توانید یک ادمین دیگر را بن کنید!")
+        return
+
+    await ban_user(update, context, target_user.id, f"دستور ادمین {update.effective_user.first_name}")
+
+# ==========================================
+# توابع قبلی (هوش مصنوعی، پنل ادمین و ...)
+# ==========================================
 def load_json(file_path):
     url = f"https://api.github.com/repos/{REPO}/contents/{file_path}"
     headers = {"Authorization": f"token {GITHUB_TOKEN}"}
@@ -90,12 +161,24 @@ async def check_join_callback(update: Update, context: ContextTypes.DEFAULT_TYPE
     query = update.callback_query
     await query.answer()
     if await check_membership(update, context):
-        await query.edit_message_text("🎉 عضویت شما تایید شد! حالا می‌توانید از ربات استفاده کنید. لطفاً دستور /start را بزنید.")
+        await query.edit_message_text("🎉 عضویت شما تایید شد! حالا می‌توانید از ربات استفاده کنید.")
     else:
         await query.edit_message_text("❌ شما هنوز در تمام کانال‌ها عضو نشده‌اید. لطفاً ابتدا عضو شوید.")
 
+async def welcome_new_member(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_chat.type in ['group', 'supergroup']:
+        for member in update.message.new_chat_members:
+            if member.id == context.bot.id:
+                await update.message.reply_text("ممنون که من رو به گروه اضافه کردید! برای مدیریت گروه و بن کردن، حتماً من رو **ادمین** کنید (با دسترسی Ban Users). 🤖")
+            else:
+                await update.message.reply_text(f"سلام {member.first_name} عزیز! به گروه خوش آمدی. 🌹\nبرای پرسیدن سوال، من رو منشن کن یا روی پیام‌هام ریپلای کن.")
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     add_user(update.effective_user.id)
+    if update.effective_chat.type in ['group', 'supergroup']:
+        await update.message.reply_text("سلام! من آماده‌ام. برای پرسیدن سوال، من رو منشن کنید یا روی پیام‌هام ریپلای کنید. (ادمین‌ها برای بن کردن: ریپلای + `/ban`)")
+        return
+
     if not await check_membership(update, context):
         await send_join_message(update, context)
         return
@@ -132,26 +215,37 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         else:
             await query.edit_message_text(text="⚠️ فیلمی برای این درس ثبت نشده است.")
 
-# --- تابع جدید برای ارسال متن‌های طولانی ---
 async def send_long_message(update: Update, text: str):
-    # محدودیت تلگرام 4096 کاراکتر است، ما 4000 در نظر می‌گیریم تا امن باشد
     max_length = 4000
     if len(text) <= max_length:
         await update.message.reply_text(text)
     else:
-        # تقسیم متن به تکه‌های 4000 کاراکتری
         for i in range(0, len(text), max_length):
             chunk = text[i:i+max_length]
             await update.message.reply_text(chunk)
+
+def call_groq_text(prompt, system_prompt):
+    url = "https://api.groq.com/openai/v1/chat/completions"
+    headers = {"Authorization": f"Bearer {GROQ_API_KEY}", "Content-Type": "application/json"}
+    payload = {
+        "model": "llama-3.3-70b-versatile",
+        "messages": [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": prompt}
+        ]
+    }
+    try:
+        res = requests.post(url, headers=headers, json=payload, timeout=20)
+        if res.status_code == 200:
+            return res.json()['choices'][0]['message']['content']
+    except Exception:
+        return None
 
 def call_openrouter_text(prompt, system_prompt):
     for model_id in VISION_MODELS:
         try:
             url = "https://openrouter.ai/api/v1/chat/completions"
-            headers = {
-                "Authorization": f"Bearer {OPENROUTER_API_KEY}",
-                "Content-Type": "application/json"
-            }
+            headers = {"Authorization": f"Bearer {OPENROUTER_API_KEY}", "Content-Type": "application/json"}
             payload = {
                 "model": model_id,
                 "messages": [
@@ -159,32 +253,44 @@ def call_openrouter_text(prompt, system_prompt):
                     {"role": "user", "content": prompt}
                 ]
             }
-            res = requests.post(url, headers=headers, json=payload, timeout=30)
+            res = requests.post(url, headers=headers, json=payload, timeout=20)
             if res.status_code == 200:
                 return res.json()['choices'][0]['message']['content']
-            elif res.status_code in [429, 404, 400]:
-                continue
         except Exception:
             continue
-    return "⚠️ در حال حاضر هیچ‌کدام از مدل‌های هوش مصنوعی رایگان پاسخگو نیستند. لطفاً چند دقیقه دیگر دوباره تلاش کنید."
+    return "⚠️ متاسفانه در حال حاضر هیچ‌کدام از مدل‌های متنی پاسخگو نیستند."
 
 async def ai_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not update.message or not update.message.text:
+        return
+        
     if not await check_membership(update, context):
         await send_join_message(update, context)
         return
+        
     if update.effective_user.id == ADMIN_ID and context.user_data.get('admin_state'):
         return
+
+    if update.effective_chat.type in ['group', 'supergroup']:
+        bot_username = context.bot.username
+        is_mentioned = f"@{bot_username}" in update.message.text
+        is_reply_to_bot = update.message.reply_to_message and update.message.reply_to_message.from_user.id == context.bot.id
+        if not (is_mentioned or is_reply_to_bot):
+            return
+
     settings, _ = load_json("settings.json")
     ai_prompt = settings.get("ai_prompt", "You are a helpful assistant.")
     
     await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
     
+    user_text = update.message.text.replace(f"@{context.bot.username}", "").strip()
+    if not user_text: user_text = "سلام"
+
     try:
-        response_text = await asyncio.wait_for(
-            asyncio.to_thread(call_openrouter_text, update.message.text, ai_prompt),
-            timeout=90.0
-        )
-        await send_long_message(update, response_text) # استفاده از تابع جدید
+        response_text = await asyncio.wait_for(asyncio.to_thread(call_groq_text, user_text, ai_prompt), timeout=30.0)
+        if not response_text:
+            response_text = await asyncio.wait_for(asyncio.to_thread(call_openrouter_text, user_text, ai_prompt), timeout=30.0)
+        await send_long_message(update, response_text)
     except asyncio.TimeoutError:
         await update.message.reply_text("⚠️ پاسخگویی بیش از حد طول کشید. لطفاً دوباره تلاش کنید.")
     except Exception as e:
@@ -194,10 +300,7 @@ def call_openrouter_image(img_b64, prompt):
     for model_id in VISION_MODELS:
         try:
             url = "https://openrouter.ai/api/v1/chat/completions"
-            headers = {
-                "Authorization": f"Bearer {OPENROUTER_API_KEY}",
-                "Content-Type": "application/json"
-            }
+            headers = {"Authorization": f"Bearer {OPENROUTER_API_KEY}", "Content-Type": "application/json"}
             payload = {
                 "model": model_id,
                 "messages": [
@@ -213,40 +316,29 @@ def call_openrouter_image(img_b64, prompt):
             res = requests.post(url, headers=headers, json=payload, timeout=30)
             if res.status_code == 200:
                 return res.json()['choices'][0]['message']['content']
-            elif res.status_code in [429, 404, 400]:
-                continue 
         except Exception:
             continue
-    return "⚠️ همه مدل‌های تصویری رایگان در حال حاضر مشغول هستند. لطفاً یک دقیقه دیگر دوباره امتحان کنید."
+    return "⚠️ همه مدل‌های تصویری رایگان در حال حاضر مشغول هستند."
 
 async def ai_image_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await check_membership(update, context):
         await send_join_message(update, context)
         return
-        
     await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="upload_photo")
-    await update.message.reply_text("👗 در حال آنالیز عکس و کشیدن الگو (لطفاً چند لحظه صبر کنید)...")
-    
+    await update.message.reply_text("👗 در حال آنالیز عکس و کشیدن الگو...")
     settings, _ = load_json("settings.json")
     ai_prompt = settings.get("ai_prompt", "You are a Master Tailor. Analyze this clothing and provide pattern drafting instructions in Persian.")
-    
     try:
         photo_file = await update.message.photo[-1].get_file()
         photo_bytes = await photo_file.download_as_bytearray()
-        
         image = Image.open(io.BytesIO(photo_bytes))
         image.thumbnail((800, 800), Image.Resampling.LANCZOS)
         img_byte_arr = io.BytesIO()
         image.convert('RGB').save(img_byte_arr, format='JPEG', quality=85)
         img_bytes = img_byte_arr.getvalue()
         img_b64 = base64.b64encode(img_bytes).decode('utf-8')
-
-        response_text = await asyncio.wait_for(
-            asyncio.to_thread(call_openrouter_image, img_b64, ai_prompt),
-            timeout=90.0
-        )
-        await send_long_message(update, response_text) # استفاده از تابع جدید
-        
+        response_text = await asyncio.wait_for(asyncio.to_thread(call_openrouter_image, img_b64, ai_prompt), timeout=80.0)
+        await send_long_message(update, response_text)
     except Exception as e:
         traceback.print_exc()
         await update.message.reply_text(f"⚠️ خطای سیستمی:\n\n`{str(e)}`", parse_mode='Markdown')
@@ -397,17 +489,22 @@ if __name__ == '__main__':
     threading.Thread(target=run_flask).start()
     application = ApplicationBuilder().token(BOT_TOKEN).build()
     
+    # ۱. هندلر دستور /ban (باید قبل از هندلرهای دیگر باشد)
+    application.add_handler(CommandHandler("ban", ban_command))
+    
+    # ۲. هندلر ضد اسپم (لینک و فحش) - اولویت بالاتر از هوش مصنوعی
+    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, auto_moderator), group=1)
+    
+    # ۳. هندلرهای اصلی و هوش مصنوعی
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("admin", admin_panel))
     application.add_handler(CommandHandler("cancel", cancel))
-    
+    application.add_handler(ChatMemberHandler(welcome_new_member, ChatMemberHandler.CHAT_MEMBER))
     application.add_handler(CallbackQueryHandler(admin_callback, pattern="^admin_|^del_|^set_"))
     application.add_handler(CallbackQueryHandler(button_handler))
-    
     application.add_handler(MessageHandler(filters.User(ADMIN_ID) & (filters.VIDEO | filters.TEXT), handle_admin_input))
-    
-    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, ai_chat))
+    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, ai_chat), group=2)
     application.add_handler(MessageHandler(filters.PHOTO, ai_image_chat))
     
-    print("Ultimate Bot with OpenRouter is running...")
+    print("Group Manager Bot is running...")
     application.run_polling()
