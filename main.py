@@ -132,8 +132,8 @@ async def ai_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         response = context.user_data['chat_history'].send_message(update.message.text)
         await update.message.reply_text(response.text)
-    except Exception:
-        await update.message.reply_text("⚠️ متاسفانه الان نمی‌تونم جواب بدم.")
+    except Exception as e:
+        await update.message.reply_text(f"⚠️ خطا:\n{str(e)}")
 
 async def ai_image_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await check_membership(update, context):
@@ -148,28 +148,15 @@ async def ai_image_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
         photo_file = await update.message.photo[-1].get_file()
         photo_bytes = await photo_file.download_as_bytearray()
         
-        # ۱. باز کردن عکس
+        # تبدیل به عکس استاندارد پایتون
         image = Image.open(io.BytesIO(photo_bytes))
         
-        # ۲. تبدیل به حالت رنگی RGB (بسیار مهم برای گوگل)
-        if image.mode != 'RGB':
-            image = image.convert('RGB')
-            
-        # ۳. تبدیل به فرمت استاندارد PNG در حافظه
-        img_byte_arr = io.BytesIO()
-        image.save(img_byte_arr, format='PNG')
-        img_byte_arr.seek(0)
-        
-        # ۴. ارسال عکس آماده به هوش مصنوعی
-        response = model.generate_content([
-            "لطفاً این لباس را آنالیز کن و دستورالعمل الگوکشی و متراژ پارچه را به فارسی بنویس.",
-            Image.open(img_byte_arr)
-        ])
-        
+        # ارسال به گوگل
+        response = model.generate_content(["لطفاً این لباس را آنالیز کن.", image])
         await update.message.reply_text(response.text)
     except Exception as e:
-        print(f"Error processing image: {e}")
-        await update.message.reply_text("⚠️ خطا در پردازش عکس. لطفاً یک عکس دیگر امتحان کنید.")
+        # اینجا دقیقاً خطای گوگل رو بهت نشون میده
+        await update.message.reply_text(f"⚠️ خطای دقیق سیستم:\n\n`{str(e)}`", parse_mode='Markdown')
 
 async def admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != ADMIN_ID: return
