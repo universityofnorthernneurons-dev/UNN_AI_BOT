@@ -118,7 +118,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         else:
             await query.edit_message_text(text="⚠️ فیلمی برای این درس ثبت نشده است.")
 
-# --- تابع ارسال درخواست به OpenRouter (متن) ---
+# --- تابع ارسال درخواست به OpenRouter (متن) با قابلیت مدل پشتیبان ---
 def call_openrouter_text(prompt, system_prompt):
     url = "https://openrouter.ai/api/v1/chat/completions"
     headers = {
@@ -126,7 +126,12 @@ def call_openrouter_text(prompt, system_prompt):
         "Content-Type": "application/json"
     }
     payload = {
-        "model": "google/gemma-4-26b-a4b-it:free", # مدل جدید و فعال
+        "models": [
+            "google/gemma-4-26b-a4b-it:free", 
+            "meta-llama/llama-3.1-8b-instruct:free", 
+            "microsoft/phi-3-mini-128k-instruct:free"
+        ],
+        "route": "fallback",
         "messages": [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": prompt}
@@ -160,7 +165,7 @@ async def ai_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         await update.message.reply_text(f"⚠️ خطای متنی:\n`{str(e)}`", parse_mode='Markdown')
 
-# --- تابع ارسال درخواست به OpenRouter (عکس) ---
+# --- تابع ارسال درخواست به OpenRouter (عکس) با قابلیت مدل پشتیبان ---
 def call_openrouter_image(img_b64, prompt):
     url = "https://openrouter.ai/api/v1/chat/completions"
     headers = {
@@ -168,7 +173,12 @@ def call_openrouter_image(img_b64, prompt):
         "Content-Type": "application/json"
     }
     payload = {
-        "model": "google/gemma-4-26b-a4b-it:free", # مدل جدید و فعال
+        "models": [
+            "google/gemma-4-26b-a4b-it:free",
+            "meta-llama/llama-3.2-11b-vision-instruct:free",
+            "qwen/qwen-2-vl-7b-instruct:free"
+        ],
+        "route": "fallback",
         "messages": [
             {
                 "role": "user",
@@ -294,7 +304,7 @@ async def admin_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_text("📝 لطفاً **متن جدید استارت** را بفرستید. (برای لغو /cancel را بزنید)")
     elif data == "set_ai_prompt":
         context.user_data['admin_state'] = 'waiting_for_ai_prompt'
-        await query.edit_message_text("🧠 لطفاً **دستورالعمل جدید هوش مصنوعی** را به انگلیسی بفرستید (مثلاً: You are a helpful teacher...). (برای لغو /cancel را بزنید)")
+        await query.edit_message_text("🧠 لطفاً **دستورالعمل جدید هوش مصنوعی** را به انگلیسی بفرستید. (برای لغو /cancel را بزنید)")
     elif data == "admin_back":
         context.user_data['admin_state'] = None
         await admin_panel(update, context)
