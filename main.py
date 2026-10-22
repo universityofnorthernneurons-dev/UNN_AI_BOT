@@ -145,6 +145,42 @@ async def ai_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         await update.message.reply_text(f"⚠️ خطای متنی:\n`{str(e)}`", parse_mode='Markdown')
 
+# --- تابع جدید پردازش عکس با روش سبک (REST API) ---
+async def process_image_with_gemini(image_bytes, prompt):
+    # تبدیل عکس به Base64
+    img_b64 = base64.b64encode(image_bytes).decode('utf-8')
+    
+    # آدرس API گوگل
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={GEMINI_API_KEY}"
+    
+    payload = {
+        "contents": [{
+            "parts": [
+                {"text": prompt},
+                {
+                    "inline_data": {
+                        "mime_type": "image/jpeg",
+                        "data": img_b64
+                    }
+                }
+            ]
+        }]
+    }
+    
+    headers = {'Content-Type': 'application/json'}
+    
+    # ارسال درخواست در یک ترد جداگانه تا ربات هنگ نکنه
+    response = await asyncio.to_thread(requests.post, url, headers=headers, json=payload, timeout=60)
+    
+    if response.status_code == 200:
+        result = response.json()
+        try:
+            return result['candidates'][0]['content']['parts'][0]['text']
+        except KeyError:
+            return "⚠️ گوگل پاسخی برنگرداند (احتمالاً فیلتر امنیتی عکس را رد کرده است)."
+    else:
+        return f"⚠️ خطای API گوگل (کد {response.status_code}):\n{response.text}"
+
 async def ai_image_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await check_membership(update, context):
         await send_join_message(update, context)
@@ -154,48 +190,28 @@ async def ai_image_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("👗 در حال آنالیز عکس و کشیدن الگو (لطفاً چند لحظه صبر کنید)...")
     
     settings, _ = load_json("settings.json")
-    ai_prompt = settings.get("ai_prompt", "You are a Master Tailor.")
+    ai_prompt = settings.get("ai_prompt", "You are a Master Tailor. Analyze this clothing and provide pattern drafting instructions in Persian.")
     
     try:
-        # ۱. دریافت عکس از تلگرام
+        # ۱. دریافت عکس
         photo_file = await update.message.photo[-1].get_file()
         photo_bytes = await photo_file.download_as_bytearray()
         
-        # ۲. باز کردن عکس و تبدیل به فرمت استاندارد
+        # ۲. تغییر سایز و تبدیل فرمت (برای سبک شدن)
         image = Image.open(io.BytesIO(photo_bytes))
-        
-        # ۳. تغییر سایز عکس (حداکثر ۱۰۲۴ پیکسل) تا گوگل خطای حجم نده
-        image.thumbnail((1024, 1024), Image.Resampling.LANCZOS)
-        
-        # ۴. تبدیل به JPEG (بهترین فرمت برای هوش مصنوعی)
+        image.thumbnail((800, 800), Image.Resampling.LANCZOS) # سایز رو کوچیکتر کردیم
         img_byte_arr = io.BytesIO()
-        image.convert('RGB').save(img_byte_arr, format='JPEG')
+        image.convert('RGB').save(img_byte_arr, format='JPEG', quality=85) # کیفیت رو کمی کم کردیم
         img_bytes = img_byte_arr.getvalue()
 
-        # ۵. آماده‌سازی مدل و ارسال
-        model = genai.GenerativeModel('gemini-1.5-flash', system_instruction=ai_prompt)
+        # ۳. ارسال به گوگل با متد جدید
+        response_text = await process_image_with_gemini(img_bytes, ai_prompt)
         
-        # ارسال به گوگل با تایم‌اوت ۶۰ ثانیه‌ای
-        response = await asyncio.wait_for(
-            asyncio.to_thread(
-                model.generate_content, 
-                [
-                    "لطفاً این لباس را آنالیز کن و دستورالعمل الگوکشی و متراژ پارچه را به فارسی بنویس.", 
-                    {"mime_type": "image/jpeg", "data": img_bytes}
-                ]
-            ),
-            timeout=60.0
-        )
+        await update.message.reply_text(response_text)
         
-        await update.message.reply_text(response.text)
-        
-    except asyncio.TimeoutError:
-        await update.message.reply_text("⚠️ گوگل برای پردازش عکس بیش از حد طول کشید. لطفاً یک عکس دیگر (با حجم کمتر) بفرستید.")
     except Exception as e:
-        # چاپ خطا در لاگ‌های Render
         traceback.print_exc()
-        # نمایش خطای دقیق به ادمین
-        await update.message.reply_text(f"⚠️ خطای دقیق پردازش عکس:\n\n`{str(e)}`", parse_mode='Markdown')
+        await update.message.reply_text(f"⚠️ خطای سیستمی:\n\n`{str(e)}`", parse_mode='Markdown')
 
 async def admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != ADMIN_ID: return
