@@ -3,6 +3,8 @@ import json
 import base64
 import requests
 import threading
+import io
+from PIL import Image
 from flask import Flask
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ApplicationBuilder, CommandHandler, CallbackQueryHandler, ContextTypes, MessageHandler, filters
@@ -145,10 +147,15 @@ async def ai_image_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         photo_file = await update.message.photo[-1].get_file()
         photo_bytes = await photo_file.download_as_bytearray()
-        response = model.generate_content(["لطفاً این لباس را آنالیز کن.", {"mime_type": "image/jpeg", "data": photo_bytes}])
+        
+        # تبدیل عکس به فرمت استاندارد برای هوش مصنوعی
+        image = Image.open(io.BytesIO(photo_bytes))
+        
+        response = model.generate_content(["لطفاً این لباس را آنالیز کن و دستورالعمل الگوکشی و متراژ پارچه را به فارسی بنویس.", image])
         await update.message.reply_text(response.text)
-    except Exception:
-        await update.message.reply_text("⚠️ خطا در پردازش عکس.")
+    except Exception as e:
+        print(f"Error processing image: {e}")
+        await update.message.reply_text("⚠️ خطا در پردازش عکس. ممکن است عکس شامل چهره انسان باشد که فیلتر گوگل آن را مسدود کرده است. لطفاً عکسی از لباس (بدون شخص) بفرستید.")
 
 async def admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != ADMIN_ID: return
