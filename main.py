@@ -126,7 +126,7 @@ def call_openrouter_text(prompt, system_prompt):
         "Content-Type": "application/json"
     }
     payload = {
-        "model": "qwen/qwen-2-vl-7b-instruct:free", # مدل جدید و فعال
+        "model": "google/gemma-4-26b-a4b-it:free", # مدل جدید و فعال
         "messages": [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": prompt}
@@ -168,7 +168,7 @@ def call_openrouter_image(img_b64, prompt):
         "Content-Type": "application/json"
     }
     payload = {
-        "model": "qwen/qwen-2-vl-7b-instruct:free", # مدل جدید و فعال
+        "model": "google/gemma-4-26b-a4b-it:free", # مدل جدید و فعال
         "messages": [
             {
                 "role": "user",
@@ -294,7 +294,7 @@ async def admin_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_text("📝 لطفاً **متن جدید استارت** را بفرستید. (برای لغو /cancel را بزنید)")
     elif data == "set_ai_prompt":
         context.user_data['admin_state'] = 'waiting_for_ai_prompt'
-        await query.edit_message_text("🧠 لطفاً **دستورالعمل جدید هوش مصنوعی** را به انگلیسی بفرستید. (برای لغو /cancel را بزنید)")
+        await query.edit_message_text("🧠 لطفاً **دستورالعمل جدید هوش مصنوعی** را به انگلیسی بفرستید (مثلاً: You are a helpful teacher...). (برای لغو /cancel را بزنید)")
     elif data == "admin_back":
         context.user_data['admin_state'] = None
         await admin_panel(update, context)
