@@ -148,14 +148,28 @@ async def ai_image_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
         photo_file = await update.message.photo[-1].get_file()
         photo_bytes = await photo_file.download_as_bytearray()
         
-        # تبدیل عکس به فرمت استاندارد برای هوش مصنوعی
+        # ۱. باز کردن عکس
         image = Image.open(io.BytesIO(photo_bytes))
         
-        response = model.generate_content(["لطفاً این لباس را آنالیز کن و دستورالعمل الگوکشی و متراژ پارچه را به فارسی بنویس.", image])
+        # ۲. تبدیل به حالت رنگی RGB (بسیار مهم برای گوگل)
+        if image.mode != 'RGB':
+            image = image.convert('RGB')
+            
+        # ۳. تبدیل به فرمت استاندارد PNG در حافظه
+        img_byte_arr = io.BytesIO()
+        image.save(img_byte_arr, format='PNG')
+        img_byte_arr.seek(0)
+        
+        # ۴. ارسال عکس آماده به هوش مصنوعی
+        response = model.generate_content([
+            "لطفاً این لباس را آنالیز کن و دستورالعمل الگوکشی و متراژ پارچه را به فارسی بنویس.",
+            Image.open(img_byte_arr)
+        ])
+        
         await update.message.reply_text(response.text)
     except Exception as e:
         print(f"Error processing image: {e}")
-        await update.message.reply_text("⚠️ خطا در پردازش عکس. ممکن است عکس شامل چهره انسان باشد که فیلتر گوگل آن را مسدود کرده است. لطفاً عکسی از لباس (بدون شخص) بفرستید.")
+        await update.message.reply_text("⚠️ خطا در پردازش عکس. لطفاً یک عکس دیگر امتحان کنید.")
 
 async def admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != ADMIN_ID: return
