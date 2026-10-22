@@ -28,9 +28,7 @@ OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY")
 
 REPO = "universityofnorthernneurons-dev/UNN_AI_BOT"
 
-# ---------------------------------------------------------
 # لیست مدل‌های رایگان و فعال برای پردازش تصویر (به ترتیب اولویت)
-# ---------------------------------------------------------
 VISION_MODELS = [
     "qwen/qwen-2.5-vl-7b-instruct:free",
     "google/gemini-2.0-flash-exp:free",
@@ -134,7 +132,18 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         else:
             await query.edit_message_text(text="⚠️ فیلمی برای این درس ثبت نشده است.")
 
-# --- تابع ارسال درخواست متنی (با چرخش خودکار بین مدل‌ها) ---
+# --- تابع جدید برای ارسال متن‌های طولانی ---
+async def send_long_message(update: Update, text: str):
+    # محدودیت تلگرام 4096 کاراکتر است، ما 4000 در نظر می‌گیریم تا امن باشد
+    max_length = 4000
+    if len(text) <= max_length:
+        await update.message.reply_text(text)
+    else:
+        # تقسیم متن به تکه‌های 4000 کاراکتری
+        for i in range(0, len(text), max_length):
+            chunk = text[i:i+max_length]
+            await update.message.reply_text(chunk)
+
 def call_openrouter_text(prompt, system_prompt):
     for model_id in VISION_MODELS:
         try:
@@ -153,7 +162,6 @@ def call_openrouter_text(prompt, system_prompt):
             res = requests.post(url, headers=headers, json=payload, timeout=30)
             if res.status_code == 200:
                 return res.json()['choices'][0]['message']['content']
-            # اگر خطای 429 یا 404 بود، به مدل بعدی می‌رویم
             elif res.status_code in [429, 404, 400]:
                 continue
         except Exception:
@@ -176,13 +184,12 @@ async def ai_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
             asyncio.to_thread(call_openrouter_text, update.message.text, ai_prompt),
             timeout=90.0
         )
-        await update.message.reply_text(response_text)
+        await send_long_message(update, response_text) # استفاده از تابع جدید
     except asyncio.TimeoutError:
         await update.message.reply_text("⚠️ پاسخگویی بیش از حد طول کشید. لطفاً دوباره تلاش کنید.")
     except Exception as e:
         await update.message.reply_text(f"⚠️ خطای متنی:\n`{str(e)}`", parse_mode='Markdown')
 
-# --- تابع ارسال درخواست تصویری (با چرخش خودکار بین مدل‌ها) ---
 def call_openrouter_image(img_b64, prompt):
     for model_id in VISION_MODELS:
         try:
@@ -207,7 +214,7 @@ def call_openrouter_image(img_b64, prompt):
             if res.status_code == 200:
                 return res.json()['choices'][0]['message']['content']
             elif res.status_code in [429, 404, 400]:
-                continue # برو سراغ مدل بعدی
+                continue 
         except Exception:
             continue
     return "⚠️ همه مدل‌های تصویری رایگان در حال حاضر مشغول هستند. لطفاً یک دقیقه دیگر دوباره امتحان کنید."
@@ -238,7 +245,7 @@ async def ai_image_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
             asyncio.to_thread(call_openrouter_image, img_b64, ai_prompt),
             timeout=90.0
         )
-        await update.message.reply_text(response_text)
+        await send_long_message(update, response_text) # استفاده از تابع جدید
         
     except Exception as e:
         traceback.print_exc()
