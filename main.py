@@ -4,6 +4,8 @@ import base64
 import requests
 import threading
 import io
+import asyncio
+import traceback
 from PIL import Image
 from flask import Flask
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
@@ -125,38 +127,75 @@ async def ai_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     settings, _ = load_json("settings.json")
     ai_prompt = settings.get("ai_prompt", "You are a helpful assistant.")
+    
     await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
-    model = genai.GenerativeModel('gemini-1.5-flash', system_instruction=ai_prompt)
-    if 'chat_history' not in context.user_data:
-        context.user_data['chat_history'] = model.start_chat(history=[])
+    
     try:
-        response = context.user_data['chat_history'].send_message(update.message.text)
+        model = genai.GenerativeModel('gemini-1.5-flash', system_instruction=ai_prompt)
+        if 'chat_history' not in context.user_data:
+            context.user_data['chat_history'] = model.start_chat(history=[])
+            
+        response = await asyncio.wait_for(
+            asyncio.to_thread(context.user_data['chat_history'].send_message, update.message.text),
+            timeout=60.0
+        )
         await update.message.reply_text(response.text)
+    except asyncio.TimeoutError:
+        await update.message.reply_text("⚠️ پاسخگویی گوگل بیش از حد طول کشید. لطفاً دوباره تلاش کنید.")
     except Exception as e:
-        await update.message.reply_text(f"⚠️ خطا:\n{str(e)}")
+        await update.message.reply_text(f"⚠️ خطای متنی:\n`{str(e)}`", parse_mode='Markdown')
 
 async def ai_image_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await check_membership(update, context):
         await send_join_message(update, context)
         return
+        
     await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="upload_photo")
-    await update.message.reply_text("👗 در حال آنالیز لباس و کشیدن الگو...")
+    await update.message.reply_text("👗 در حال آنالیز عکس و کشیدن الگو (لطفاً چند لحظه صبر کنید)...")
+    
     settings, _ = load_json("settings.json")
     ai_prompt = settings.get("ai_prompt", "You are a Master Tailor.")
-    model = genai.GenerativeModel('gemini-1.5-flash', system_instruction=ai_prompt)
+    
     try:
+        # ۱. دریافت عکس از تلگرام
         photo_file = await update.message.photo[-1].get_file()
         photo_bytes = await photo_file.download_as_bytearray()
         
-        # تبدیل به عکس استاندارد پایتون
+        # ۲. باز کردن عکس و تبدیل به فرمت استاندارد
         image = Image.open(io.BytesIO(photo_bytes))
         
-        # ارسال به گوگل
-        response = model.generate_content(["لطفاً این لباس را آنالیز کن.", image])
+        # ۳. تغییر سایز عکس (حداکثر ۱۰۲۴ پیکسل) تا گوگل خطای حجم نده
+        image.thumbnail((1024, 1024), Image.Resampling.LANCZOS)
+        
+        # ۴. تبدیل به JPEG (بهترین فرمت برای هوش مصنوعی)
+        img_byte_arr = io.BytesIO()
+        image.convert('RGB').save(img_byte_arr, format='JPEG')
+        img_bytes = img_byte_arr.getvalue()
+
+        # ۵. آماده‌سازی مدل و ارسال
+        model = genai.GenerativeModel('gemini-1.5-flash', system_instruction=ai_prompt)
+        
+        # ارسال به گوگل با تایم‌اوت ۶۰ ثانیه‌ای
+        response = await asyncio.wait_for(
+            asyncio.to_thread(
+                model.generate_content, 
+                [
+                    "لطفاً این لباس را آنالیز کن و دستورالعمل الگوکشی و متراژ پارچه را به فارسی بنویس.", 
+                    {"mime_type": "image/jpeg", "data": img_bytes}
+                ]
+            ),
+            timeout=60.0
+        )
+        
         await update.message.reply_text(response.text)
+        
+    except asyncio.TimeoutError:
+        await update.message.reply_text("⚠️ گوگل برای پردازش عکس بیش از حد طول کشید. لطفاً یک عکس دیگر (با حجم کمتر) بفرستید.")
     except Exception as e:
-        # اینجا دقیقاً خطای گوگل رو بهت نشون میده
-        await update.message.reply_text(f"⚠️ خطای دقیق سیستم:\n\n`{str(e)}`", parse_mode='Markdown')
+        # چاپ خطا در لاگ‌های Render
+        traceback.print_exc()
+        # نمایش خطای دقیق به ادمین
+        await update.message.reply_text(f"⚠️ خطای دقیق پردازش عکس:\n\n`{str(e)}`", parse_mode='Markdown')
 
 async def admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != ADMIN_ID: return
