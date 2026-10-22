@@ -1,3 +1,5 @@
 python-telegram-bot
 Flask
 requests
+google-generativeai
+Pillow
