@@ -28,6 +28,22 @@ OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY")
 
 REPO = "universityofnorthernneurons-dev/UNN_AI_BOT"
 
+# ---------------------------------------------------------
+# لیست مدل‌های رایگان و فعال برای پردازش تصویر (به ترتیب اولویت)
+# ---------------------------------------------------------
+VISION_MODELS = [
+    "qwen/qwen-2.5-vl-7b-instruct:free",
+    "google/gemini-2.0-flash-exp:free",
+    "nvidia/nemotron-nano-12b-v2-vl:free",
+    "google/gemma-3-12b-it:free",
+    "google/gemma-3-27b-it:free",
+    "google/gemma-3-4b-it:free",
+    "mistralai/mistral-small-3.1-24b-instruct:free",
+    "dots-studio/dots-3-note-preview:free",
+    "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free",
+    "qwen/qwen3.8-27b:free"
+]
+
 def load_json(file_path):
     url = f"https://api.github.com/repos/{REPO}/contents/{file_path}"
     headers = {"Authorization": f"token {GITHUB_TOKEN}"}
@@ -118,30 +134,31 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         else:
             await query.edit_message_text(text="⚠️ فیلمی برای این درس ثبت نشده است.")
 
-# --- تابع ارسال درخواست به OpenRouter (متن) با قابلیت مدل پشتیبان ---
+# --- تابع ارسال درخواست متنی (با چرخش خودکار بین مدل‌ها) ---
 def call_openrouter_text(prompt, system_prompt):
-    url = "https://openrouter.ai/api/v1/chat/completions"
-    headers = {
-        "Authorization": f"Bearer {OPENROUTER_API_KEY}",
-        "Content-Type": "application/json"
-    }
-    payload = {
-        "models": [
-            "google/gemma-4-26b-a4b-it:free", 
-            "meta-llama/llama-3.1-8b-instruct:free", 
-            "microsoft/phi-3-mini-128k-instruct:free"
-        ],
-        "route": "fallback",
-        "messages": [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": prompt}
-        ]
-    }
-    res = requests.post(url, headers=headers, json=payload, timeout=60)
-    if res.status_code == 200:
-        return res.json()['choices'][0]['message']['content']
-    else:
-        return f"⚠️ خطای OpenRouter (کد {res.status_code}):\n{res.text}"
+    for model_id in VISION_MODELS:
+        try:
+            url = "https://openrouter.ai/api/v1/chat/completions"
+            headers = {
+                "Authorization": f"Bearer {OPENROUTER_API_KEY}",
+                "Content-Type": "application/json"
+            }
+            payload = {
+                "model": model_id,
+                "messages": [
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": prompt}
+                ]
+            }
+            res = requests.post(url, headers=headers, json=payload, timeout=30)
+            if res.status_code == 200:
+                return res.json()['choices'][0]['message']['content']
+            # اگر خطای 429 یا 404 بود، به مدل بعدی می‌رویم
+            elif res.status_code in [429, 404, 400]:
+                continue
+        except Exception:
+            continue
+    return "⚠️ در حال حاضر هیچ‌کدام از مدل‌های هوش مصنوعی رایگان پاسخگو نیستند. لطفاً چند دقیقه دیگر دوباره تلاش کنید."
 
 async def ai_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await check_membership(update, context):
@@ -157,7 +174,7 @@ async def ai_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         response_text = await asyncio.wait_for(
             asyncio.to_thread(call_openrouter_text, update.message.text, ai_prompt),
-            timeout=60.0
+            timeout=90.0
         )
         await update.message.reply_text(response_text)
     except asyncio.TimeoutError:
@@ -165,35 +182,35 @@ async def ai_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         await update.message.reply_text(f"⚠️ خطای متنی:\n`{str(e)}`", parse_mode='Markdown')
 
-# --- تابع ارسال درخواست به OpenRouter (عکس) با قابلیت مدل پشتیبان ---
+# --- تابع ارسال درخواست تصویری (با چرخش خودکار بین مدل‌ها) ---
 def call_openrouter_image(img_b64, prompt):
-    url = "https://openrouter.ai/api/v1/chat/completions"
-    headers = {
-        "Authorization": f"Bearer {OPENROUTER_API_KEY}",
-        "Content-Type": "application/json"
-    }
-    payload = {
-        "models": [
-            "google/gemma-4-26b-a4b-it:free",
-            "meta-llama/llama-3.2-11b-vision-instruct:free",
-            "qwen/qwen-2-vl-7b-instruct:free"
-        ],
-        "route": "fallback",
-        "messages": [
-            {
-                "role": "user",
-                "content": [
-                    {"type": "text", "text": prompt},
-                    {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{img_b64}"}}
+    for model_id in VISION_MODELS:
+        try:
+            url = "https://openrouter.ai/api/v1/chat/completions"
+            headers = {
+                "Authorization": f"Bearer {OPENROUTER_API_KEY}",
+                "Content-Type": "application/json"
+            }
+            payload = {
+                "model": model_id,
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "text", "text": prompt},
+                            {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{img_b64}"}}
+                        ]
+                    }
                 ]
             }
-        ]
-    }
-    res = requests.post(url, headers=headers, json=payload, timeout=60)
-    if res.status_code == 200:
-        return res.json()['choices'][0]['message']['content']
-    else:
-        return f"⚠️ خطای OpenRouter (کد {res.status_code}):\n{res.text}"
+            res = requests.post(url, headers=headers, json=payload, timeout=30)
+            if res.status_code == 200:
+                return res.json()['choices'][0]['message']['content']
+            elif res.status_code in [429, 404, 400]:
+                continue # برو سراغ مدل بعدی
+        except Exception:
+            continue
+    return "⚠️ همه مدل‌های تصویری رایگان در حال حاضر مشغول هستند. لطفاً یک دقیقه دیگر دوباره امتحان کنید."
 
 async def ai_image_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await check_membership(update, context):
@@ -219,7 +236,7 @@ async def ai_image_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         response_text = await asyncio.wait_for(
             asyncio.to_thread(call_openrouter_image, img_b64, ai_prompt),
-            timeout=60.0
+            timeout=90.0
         )
         await update.message.reply_text(response_text)
         
